@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import OpenAI # Keep this import for type hinting or if you re-initialize it
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
@@ -11,7 +11,8 @@ import json
 
 load_dotenv()  # This loads variables from .env into os.environ
 
-openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# REMOVED: openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# The OpenAI client will now be passed as an argument to relevant functions.
 
 # Main folder name
 main_folder = "universitylist"
@@ -45,7 +46,8 @@ try:
     print(f"Main folder '{main_folder}' created or already exists")
 except Exception as e:
     print(f"Error creating main folder: {e}")
-    exit()
+    # Do not exit() here, as it's a library being imported
+    # Streamlit will handle errors gracefully.
 
 # Create country folders inside the main folder
 for country in country_folders:
@@ -145,14 +147,15 @@ def extract_university_tables_from_url(url, country_name):
         print(f"An error occurred during extraction from {url}: {e}")
     return extracted_data
 
-def check_with_openai(university_name):
+def check_with_openai(university_name, openai_client):
     """
     Checks with OpenAI if a university has an agriculture department.
+    Accepts openai_client as an argument.
     """
     prompt = f"Does {university_name} have an agriculture department or related program? Answer with just 'Yes' or 'No'."
     try:
-        response = openai.chat.completions.create(
-            model="gpt-4.1-mini-2025-04-14", # Using gpt-4 for better accuracy
+        response = openai_client.chat.completions.create( # Use passed client
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that provides accurate information about university departments."},
                 {"role": "user", "content": prompt}
@@ -166,14 +169,15 @@ def check_with_openai(university_name):
         print(f"Error querying OpenAI for agriculture department for {university_name}: {e}")
         return False
     
-def check_with_openai_TTO(university_name):
+def check_with_openai_TTO(university_name, openai_client):
     """
     Checks with OpenAI if a university has a TTO/KTO office.
+    Accepts openai_client as an argument.
     """
     prompt = f"Does {university_name} have a Technology Transfer Office (TTO) or Knowledge Transfer Office (KTO) or a similar intellectual property commercialization office? Answer with just 'Yes' or 'No'."
     try:
-        response = openai.chat.completions.create(
-            model="gpt-4.1-mini-2025-04-14", # Using gpt-4 for better accuracy
+        response = openai_client.chat.completions.create( # Use passed client
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that provides accurate information about university offices."},
                 {"role": "user", "content": prompt}
@@ -304,92 +308,5 @@ def find_university_linkedin(university_name):
     linkedin_search = f"https://www.linkedin.com/search/results/all/?keywords={requests.utils.quote(university_name)}&origin=GLOBAL_SEARCH_HEADER&entityType=school"
     return linkedin_search
 
-# --- Script Execution ---
-if __name__ == "__main__":
-    print("Starting data extraction from Wikipedia...")
-    for country in country_folders: # This loop will now only run for "Thailand"
-        wikipedia_url = ""
-        if country == "Philippines": # This condition will not be met
-            wikipedia_url = f"https://en.wikipedia.org/wiki/List_of_colleges_and_universities_in_the_Philippines"
-        else:
-            wikipedia_url = f"https://en.wikipedia.org/wiki/List_of_universities_in_{country}"
-        
-        print(f"\nProcessing {country} from {wikipedia_url}")
-        
-        # Get data for the current country
-        country_universities_data = extract_university_tables_from_url(wikipedia_url, country)
-        
-        # Add to our global list of all universities, limited to 100
-        all_extracted_university_data.extend(country_universities_data[:100])
-    
-    print(f"\nFinished initial data extraction. Total universities found (limited to 100 per country): {len(all_extracted_university_data)}")
-
-    final_university_data = []
-    processed_count = 0
-
-    print("\nProcessing each university for detailed information and OpenAI checks...")
-    for uni_info in all_extracted_university_data:
-        if processed_count >= 20: # Enforce overall limit of 100 universities
-            print("Reached maximum of 100 universities for detailed processing. Stopping.")
-            break
-
-        university_name = uni_info.get('University')
-        if not university_name:
-            print(f"Skipping a record due to missing 'University' name: {uni_info}")
-            continue
-
-        print(f"\n--- Processing: {university_name} ---")
-        
-        website = uni_info.get('Website', 'N/A')
-        country = uni_info.get('Country', 'N/A')
-        region = ASEAN_REGIONS.get(country, 'Unknown')
-
-        has_agriculture = check_with_openai(university_name)
-        
-        if has_agriculture:
-            print(f"  -> Has Agriculture Department: Yes")
-            has_tto = check_with_openai_TTO(university_name)
-            tto_page_url = "N/A"
-            if has_tto:
-                tto_page_url = get_tto_page_url(university_name, website)
-                print(f"  -> Has TTO: Yes, TTO Page URL: {tto_page_url}")
-            else:
-                print(f"  -> Has TTO: No")
-
-            incubation_record = get_incubation_record(university_name, website)
-            print(f"  -> Incubation Record: {incubation_record}")
-            
-            linkedin_search_url = find_university_linkedin(university_name)
-            print(f"  -> Apollo/LinkedIn Search URL: {linkedin_search_url}")
-
-            final_university_data.append({
-                'University': university_name,
-                'Country': country,
-                'Region': region,
-                'Website': website,
-                'Has TTO?': 'Yes' if has_tto else 'No',
-                'TTO Page URL': tto_page_url,
-                'Incubation Record': incubation_record,
-                'Apollo/LinkedIn Search URL': linkedin_search_url
-            })
-            processed_count += 1 # Increment only if processed for final CSV
-        else:
-            print(f"  -> Has Agriculture Department: No (Skipping detailed processing)")
-    
-    output_csv_filename = "asean_universities_data_thailand_limited.csv" # Changed output filename
-    if final_university_data:
-        # Define the exact columns order
-        headers = [
-            'University', 'Country', 'Region', 'Website', 
-            'Has TTO?', 'TTO Page URL', 'Incubation Record', 'Apollo/LinkedIn Search URL'
-        ]
-        
-        with open(output_csv_filename, 'w', newline='', encoding='utf-8') as outfile:
-            writer = csv.DictWriter(outfile, fieldnames=headers)
-            writer.writeheader()
-            writer.writerows(final_university_data)
-        print(f"\nSuccessfully created '{output_csv_filename}' with {len(final_university_data)} records.")
-    else:
-        print("\nNo universities with agriculture departments were found to generate the CSV.")
-
-    print("\nScript execution finished.")
+# REMOVED the if __name__ == "__main__": block
+# This script is now intended to be imported as a module by streamlit_app.py
