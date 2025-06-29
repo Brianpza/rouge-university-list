@@ -3,14 +3,15 @@ import pandas as pd
 import io
 import sys
 import contextlib
+from openai import OpenAI # Correct: Import OpenAI class directly from the openai library
 
 # Import all functions from your backend script (assuming it's named main.py)
-# If your backend script has a different name, replace 'main' with that name.
 from main import (
     country_folders, ASEAN_REGIONS,
-    extract_university_tables_from_url, check_with_openai, check_with_openai_TTO,
+    extract_university_tables_from_url,
     google_search_for_url, get_tto_page_url, get_incubation_record,
-    find_university_linkedin, OpenAI # Import OpenAI client to set API key
+    find_university_linkedin,
+    check_with_openai, check_with_openai_TTO # These now correctly expect an openai_client argument
 )
 
 # Set up the Streamlit page
@@ -38,20 +39,26 @@ with st.sidebar:
     )
     st.info("Your API key is not stored and is only used for the current session.")
 
+    # Initialize OpenAI client only when API key is provided
     if openai_api_key:
-        st.success("OpenAI API Key provided.")
         try:
-            from main import openai as backend_openai_client
-            backend_openai_client.api_key = openai_api_key
+            # Correct: Instantiate OpenAI client directly within streamlit_app.py
+            st.session_state['openai_client'] = OpenAI(api_key=openai_api_key)
+            st.success("OpenAI API Key provided and client configured.")
             st.session_state['openai_configured'] = True
         except Exception as e:
             st.error(f"Failed to configure OpenAI client: {e}")
             st.session_state['openai_configured'] = False
+            # Ensure client is removed if configuration fails
+            if 'openai_client' in st.session_state:
+                del st.session_state['openai_client']
     else:
         st.warning("Please enter your OpenAI API Key to proceed.")
         st.session_state['openai_configured'] = False
+        if 'openai_client' in st.session_state:
+            del st.session_state['openai_client'] # Clear client if key is removed or empty
 
-    # New: User-defined limit for universities
+    # User-defined limit for universities
     university_limit = st.number_input(
         "Maximum Universities to Process (Thailand)",
         min_value=1,
@@ -83,13 +90,16 @@ def st_stdout_redirect(placeholder):
 # Use the user-defined limit from session_state
 current_limit = st.session_state.get('university_limit', 10) # Default to 10 if not set
 
-if st.button(f"Start Data Extraction for Thailand (Max {current_limit} Universities)", disabled=not st.session_state.get('openai_configured', False)):
-    if not st.session_state.get('openai_configured', False):
+if st.button(f"Start Data Extraction for Thailand (Max {current_limit} Universities)",
+             disabled=not st.session_state.get('openai_configured', False)):
+
+    if not st.session_state.get('openai_configured', False) or 'openai_client' not in st.session_state:
         st.error("Please configure your OpenAI API Key in the sidebar first.")
     else:
+        openai_client = st.session_state['openai_client'] # Get the configured client
         st.info("Starting data extraction... This might take a while.")
         progress_text = st.empty()
-        
+
         all_extracted_university_data_for_streamlit = []
         final_university_data = []
         processed_count = 0
@@ -104,17 +114,17 @@ if st.button(f"Start Data Extraction for Thailand (Max {current_limit} Universit
                     for country in ["Thailand"]: # Only process Thailand as per requirement
                         wikipedia_url = f"https://en.wikipedia.org/wiki/List_of_universities_in_{country}"
                         st.text(f"\nProcessing {country} from {wikipedia_url}")
-                        
+
                         country_universities_data = extract_university_tables_from_url(wikipedia_url, country)
-                        
+
                         # Limit to user-defined number of universities from Wikipedia for further processing
                         all_extracted_university_data_for_streamlit.extend(country_universities_data[:current_limit])
-                
+
                 st.success(f"Finished initial data extraction. Total universities found (limited to {current_limit}): {len(all_extracted_university_data_for_streamlit)}")
 
             # Step 2: Detailed Processing with OpenAI and Google Searches
             st.info("Starting detailed processing for each university...")
-            
+
             total_unis_to_process = len(all_extracted_university_data_for_streamlit)
             progress_bar = st.progress(0)
 
@@ -133,16 +143,18 @@ if st.button(f"Start Data Extraction for Thailand (Max {current_limit} Universit
 
                 with st_stdout_redirect(output_placeholder):
                     st.text(f"\n--- Processing: {university_name} ---")
-                    
+
                     website = uni_info.get('Website', 'N/A')
                     country = uni_info.get('Country', 'N/A')
                     region = ASEAN_REGIONS.get(country, 'Unknown')
 
-                    has_agriculture = check_with_openai(university_name)
-                    
+                    # Pass the openai_client here
+                    has_agriculture = check_with_openai(university_name, openai_client)
+
                     if has_agriculture:
                         st.text(f"  -> Has Agriculture Department: Yes")
-                        has_tto = check_with_openai_TTO(university_name)
+                        # Pass the openai_client here
+                        has_tto = check_with_openai_TTO(university_name, openai_client)
                         tto_page_url = "N/A"
                         if has_tto:
                             tto_page_url = get_tto_page_url(university_name, website)
@@ -152,7 +164,7 @@ if st.button(f"Start Data Extraction for Thailand (Max {current_limit} Universit
 
                         incubation_record = get_incubation_record(university_name, website)
                         st.text(f"  -> Incubation Record: {incubation_record}")
-                        
+
                         linkedin_search_url = find_university_linkedin(university_name)
                         st.text(f"  -> Apollo/LinkedIn Search URL: {linkedin_search_url}")
 
@@ -169,7 +181,7 @@ if st.button(f"Start Data Extraction for Thailand (Max {current_limit} Universit
                         processed_count += 1
                     else:
                         st.text(f"  -> Has Agriculture Department: No (Skipping detailed processing)")
-            
+
             progress_bar.empty()
             progress_text.empty()
 
